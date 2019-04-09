@@ -26,6 +26,6 @@ Your application -> `go-kahla-notify-server` -> Kahla server -> Stargate -> Your
 
 2. Edit `config.json`.
 
-3. Run `./go-kahla-notify-server`.
+3. Run `./go-kahla-notify-server`.gi
 
 ## [MIT License](LICENSE)
