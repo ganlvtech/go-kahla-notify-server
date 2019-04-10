@@ -14,9 +14,9 @@ Your application -> `go-kahla-notify-server` -> Kahla server -> Stargate -> Your
 
 2. It will accept your friend request immediately and reply a message. It is your access token.
 
-3. Send a notification using an HTTP GET request like `/send?token=0123456789abcdef0123456789abcdef&message=HelloWorld`.
+3. Send a notification using an HTTP GET request like `/send?token=0123456789abcdef0123456789abcdef&content=HelloWorld`.
 
-4. You can reset your access token by sending `Kahla Notify Bot` a message `reset access token`.
+4. You can reset your access token by sending `Kahla Notify Bot` a message `refresh token`.
 
 5. You can delete your account from `go-kahla-notify-server` by delete the friend `Kahla Notify Bot`.
 
@@ -26,6 +26,6 @@ Your application -> `go-kahla-notify-server` -> Kahla server -> Stargate -> Your
 
 2. Edit `config.json`.
 
-3. Run `./go-kahla-notify-server`.gi
+3. Run `./go-kahla-notify-server`
 
 ## [MIT License](LICENSE)
