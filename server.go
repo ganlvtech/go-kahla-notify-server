@@ -11,6 +11,14 @@ import (
 	"sync"
 )
 
+const (
+	ResponseCodeOK = iota
+	ResponseCodeNoAccessToken
+	ResponseCodeNoContent
+	ResponseCodeInvalidAccessToken
+	ResponseCodeSendMessageFailed
+)
+
 type Conversation struct {
 	Token          string
 	ConversationID int

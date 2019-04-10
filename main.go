@@ -8,14 +8,6 @@ import (
 
 const DefaultConfigFile = "config.json"
 
-const (
-	ResponseCodeOK = iota
-	ResponseCodeNoAccessToken
-	ResponseCodeNoContent
-	ResponseCodeInvalidAccessToken
-	ResponseCodeSendMessageFailed
-)
-
 func main() {
 	// Load email and password
 	configFile := DefaultConfigFile
