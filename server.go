@@ -18,14 +18,38 @@ type Conversation struct {
 	AesKey         string
 }
 
-type Conversations []Conversation
+type Conversations []*Conversation
 
-func (c *Conversations) keyByToken() map[string]*Conversation {
-	result := make(map[string]*Conversation)
+type ConversationNotFound struct{}
+
+func (*ConversationNotFound) Error() string {
+	return "conversation not found"
+}
+
+func (c *Conversations) KeyByConversationID() map[int]*Conversation {
+	result := make(map[int]*Conversation)
 	for _, v := range *c {
-		result[v.Token] = &v
+		result[v.ConversationID] = v
 	}
 	return result
+}
+
+func (c *Conversations) GetByConversationID(conversationId int) (*Conversation, error) {
+	for _, v := range *c {
+		if v.ConversationID == conversationId {
+			return v, nil
+		}
+	}
+	return nil, &ConversationNotFound{}
+}
+
+func (c *Conversations) GetByToken(token string) (*Conversation, error) {
+	for _, v := range *c {
+		if v.Token == token {
+			return v, nil
+		}
+	}
+	return nil, &ConversationNotFound{}
 }
 
 type TokenNotExists struct{}
@@ -44,6 +68,7 @@ type NotifyServer struct {
 	httpServer              *http.Server
 	friendRequestChan       chan struct{}
 	updateConversationsChan chan struct{}
+	sendNewTokensChan       chan struct{}
 	conversations           *Conversations
 }
 
@@ -57,6 +82,9 @@ func NewNotifyServer(email string, password string, port int) *NotifyServer {
 	s.newHttpServer()
 	s.friendRequestChan = make(chan struct{}, 1)
 	s.updateConversationsChan = make(chan struct{}, 1)
+	s.sendNewTokensChan = make(chan struct{}, 1)
+	conversations := make(Conversations, 0)
+	s.conversations = &conversations
 	return s
 }
 
@@ -75,6 +103,7 @@ func (s *NotifyServer) login() error {
 		return err
 	}
 	log.Println("Login OK.")
+	s.UpdateConversations()
 	return nil
 }
 
@@ -169,19 +198,25 @@ func (s *NotifyServer) runEventListener(interrupt <-chan struct{}, done chan<- s
 					if err != nil {
 						log.Println(err)
 					}
-					// TODO parse message, refresh token
+					if content == "refresh token" {
+						conversation, err := s.conversations.GetByConversationID(v.ConversationID)
+						if err != nil {
+							log.Println(err)
+						}
+						conversation.Token = ""
+						s.SendNewTokens()
+					}
 				}
 			case *kahla.NewFriendRequestEvent:
 				title := "Friend request"
 				message := "You have got a new friend request!"
 				log.Println(title, ":", message, "nick name:", v.Requester.NickName, "id:", v.Requester.ID)
 				s.AcceptFriendRequest()
-				// TODO accept friend request
 			case *kahla.WereDeletedEvent:
 				title := "Were deleted"
 				message := "You were deleted by one of your friends from his friend list."
 				log.Println(title, ":", message, "nick name:", v.Trigger.NickName, "id:", v.Trigger.ID)
-				// TODO remove token
+				s.UpdateConversations()
 			case *kahla.FriendAcceptedEvent:
 				title := "Friend request"
 				message := "Your friend request was accepted!"
@@ -224,7 +259,7 @@ func (s *NotifyServer) newHttpServer() {
 		err := s.SendMessageByToken(token, content)
 		if err != nil {
 			_, ok := err.(*TokenNotExists)
-			if !ok {
+			if ok {
 				c.JSON(401, gin.H{
 					"code":    ResponseCodeInvalidAccessToken,
 					"message": "Invalid access token.",
@@ -235,6 +270,7 @@ func (s *NotifyServer) newHttpServer() {
 				"code": ResponseCodeSendMessageFailed,
 				"msg":  "Send message failed. " + err.Error(),
 			})
+			return
 		}
 		c.JSON(200, gin.H{
 			"code": ResponseCodeOK,
@@ -284,7 +320,7 @@ func (s *NotifyServer) acceptFriendRequest() error {
 				continue
 			}
 			log.Println("Complete friend request:", v.Creator.NickName)
-			// TODO send token
+			s.UpdateConversations()
 		}
 	}
 	return err1
@@ -307,12 +343,28 @@ func (s *NotifyServer) AcceptFriendRequest() {
 }
 
 func (s *NotifyServer) updateConversations() error {
-	_, err := s.client.Friendship.MyFriends(false)
+	response, err := s.client.Friendship.MyFriends(false)
 	if err != nil {
-		log.Println("Update conversation failed.", err)
+		log.Println("Update conversations failed.", err)
 		return err
 	}
-	// TODO find new conversations
+	conversationsMap := s.conversations.KeyByConversationID()
+	conversations := make(Conversations, 0, len(*s.conversations)+len(response.Items))
+	for _, v := range response.Items {
+		v1, ok := conversationsMap[v.ConversationID]
+		if ok {
+			conversations = append(conversations, v1)
+		} else {
+			conversations = append(conversations, &Conversation{
+				ConversationID: v.ConversationID,
+				Token:          "",
+				AesKey:         v.AesKey,
+				UserID:         v.UserID,
+			})
+			s.SendNewTokens()
+		}
+	}
+	s.conversations = &conversations
 	return nil
 }
 
@@ -332,7 +384,42 @@ func (s *NotifyServer) UpdateConversations() {
 	}
 }
 
-func (s *NotifyServer) SendMessage(conversationId int, content string) error {
+func (s *NotifyServer) sendNewTokens() error {
+	var err1 error
+	for _, v := range *s.conversations {
+		if v.Token == "" {
+			v.Token = randomString(32)
+			err := s.SendMessage(v.ConversationID, v.Token, v.AesKey)
+			if err != nil {
+				log.Println("Send new token failed.", err, "UserID:", v.UserID)
+				if err1 == nil {
+					err1 = err
+				}
+				continue
+			}
+			log.Println("Send new token OK")
+		}
+	}
+	return err1
+}
+
+func (s *NotifyServer) SendNewTokens() {
+	select {
+	case s.sendNewTokensChan <- struct{}{}:
+		log.Println("Send new tokens task added.")
+		go func() {
+			err := s.sendNewTokens()
+			if err != nil {
+				log.Println(err)
+			}
+			<-s.sendNewTokensChan
+		}()
+	default:
+		log.Println("Send new tokens task exists. Ignore.")
+	}
+}
+
+func (s *NotifyServer) SendRawMessage(conversationId int, content string) error {
 	err := retry.Do(func() error {
 		_, err := s.client.Conversation.SendMessage(conversationId, content)
 		if err != nil {
@@ -347,12 +434,23 @@ func (s *NotifyServer) SendMessage(conversationId int, content string) error {
 	return nil
 }
 
+func (s *NotifyServer) SendMessage(conversationId int, content string, aesKey string) error {
+	content, err := cryptojs.AesEncrypt(content, aesKey)
+	if err != nil {
+		return err
+	}
+	return s.SendRawMessage(conversationId, content)
+}
+
 func (s *NotifyServer) SendMessageByToken(token string, content string) error {
 	if s.conversations == nil {
 		return &TokenNotExists{}
 	}
-	// TODO map token to conversation ID
-	return s.SendMessage(1, content)
+	conversation, err := s.conversations.GetByToken(token)
+	if err != nil {
+		return &TokenNotExists{}
+	}
+	return s.SendMessage(conversation.ConversationID, content, conversation.AesKey)
 }
 
 func (s *NotifyServer) Run(interrupt <-chan struct{}) error {
